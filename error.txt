@@ -1,0 +1,88 @@
+usermod -aG sudo gladiator1
+ssh-keygen -t rsa -b 4096
+chmod 700 ~/.ssh
+chmod 600 ~/.ssh/authorized_keys
+
+apt update
+apt install icinga2 monitoring-plugins -y
+systemctl enable icinga2
+systemctl start icinga2
+apt install icingaweb2 icingacli -y
+icingacli setup token create
+http://IP-NMS/icingaweb2/setup
+nano /etc/icinga2/conf.d/hosts.conf
+object Host "web1" {
+  import "generic-host"
+  address = "192.168.1.10"
+  check_command = "hostalive"
+}
+
+nano /etc/icinga2/conf.d/services.conf
+apply Service "ping" {
+  check_command = "ping4"
+  assign where host.name == "web1"
+}
+
+apply Service "ssh" {
+  check_command = "ssh"
+  assign where host.name == "web1"
+}
+
+apply Service "http" {
+  check_command = "http"
+  assign where host.name == "web1"
+}
+
+apt install nagios-nrpe-server -y
+
+icinga2 daemon -C
+http://IP-NMS/icingaweb2
+
+apt install nfs-kernel-server -y
+mkdir -p /opt/backup
+chown nobody:nogroup /opt/backup
+chmod 777 /opt/backup
+nano /etc/exports
+/opt/backup *(rw,sync,no_subtree_check)
+
+exportfs -a
+systemctl restart nfs-kernel-server
+
+mount IP_WEB1:/opt/backup /mnt
+
+apt install slapd ldap-utils -y
+dpkg-reconfigure slapd
+apt install phpldapadmin -y
+http://IP_WEB2/phpldapadmin
+
+
+nano base.ldif
+dn: ou=VPN,dc=lksjogja,dc=id
+objectClass: organizationalUnit
+ou: VPN
+
+dn: ou=Manager,dc=lksjogja,dc=id
+objectClass: organizationalUnit
+ou: Manager
+
+ldapadd -x -D "cn=admin,dc=lksjogja,dc=id" -W -f base.ldif
+
+slappasswd
+
+dn: uid=vpnuser1,ou=VPN,dc=lksjogja,dc=id
+objectClass: inetOrgPerson
+cn: vpnuser1
+sn: user1
+uid: vpnuser1
+userPassword: Skill39
+EOF
+
+ldapadd -x -D "cn=admin,dc=lksjogja,dc=id" -W -f user.ldif
+
+
+
+
+
+
+
+

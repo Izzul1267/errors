@@ -1,0 +1,195 @@
+# Buat Key Root CA
+openssl genrsa -out ca.key 4096
+
+# Buat Sertifikat Root CA
+openssl req -x509 -new -nodes -key ca.key -sha256 -days 3650 -out ca.crt
+
+
+# Buat Private Key WEB1
+openssl genrsa -out web1.key 2048
+
+# Buat CSR (Permintaan Sertifikat)
+openssl req -new -key web1.key -out web1.csr
+
+# Tandatangani dengan Root CA tadi
+openssl x509 -req -in web1.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
+-out web1.crt -days 365 -sha256
+
+# Pindahkan file ke tempat yang aman
+sudo mv web1.crt /etc/ssl/certs/
+sudo mv web1.key /etc/ssl/private/
+sudo mv ca.crt /etc/ssl/certs/
+
+# Atur Izin Akses (Penting!)
+sudo chmod 600 /etc/ssl/private/web1.key
+
+
+#nginx
+
+server {
+    listen 80;
+    server_name web1.merapi.id;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name web1.merapi.id;
+
+    ssl_certificate /etc/ssl/certs/web1.crt;
+    ssl_certificate_key /etc/ssl/private/web1.key;
+
+    root /var/www/merapi;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ =404;
+    }
+}
+
+sudo ln -s /etc/nginx/sites-available/webbaru /etc/nginx/sites-enabled/
+
+#haproxy
+
+# 1. Frontend untuk HTTP (Port 80)
+frontend http_front
+    bind *:80
+    mode http
+    default_backend web_servers_http
+
+# 2. Frontend untuk HTTPS (Port 443) - Mode Passthrough
+frontend https_front
+    bind *:443
+    mode tcp
+    tcp-request inspect-delay 5s
+    tcp-request content accept if { req_ssl_hello_type 1 }
+    default_backend web_servers_https
+
+# 3. Backend HTTP
+backend web_servers_http
+    mode http
+    balance roundrobin
+    server web1 192.168.14.2:80 check
+    server web2 192.168.14.3:80 check
+
+# 4. Backend HTTPS
+backend web_servers_https
+    mode tcp
+    balance roundrobin
+    server web1 192.168.14.2:443 check
+    server web2 192.168.14.3:443 check
+    
+    
+#sql
+-- Membuat user untuk Roundcube (Webmail)
+CREATE USER 'user'@'%' IDENTIFIED BY 'pass';
+GRANT ALL PRIVILEGES ON databases.* TO 'user'@'%';
+
+FLUSH PRIVILEGES;
+
+#3306
+
+#mail
+
+mail    IN    A     192.168.14.3
+@       IN    MX    10 mail.merapi.id.
+
+sudo apt update
+sudo apt install postfix dovecot-imapd dovecot-pop3d -y
+
+sudo apt install postfix mailutils -y
+
+myhostname = mail.local
+mydomain = local
+myorigin = /etc/mailname
+
+inet_interfaces = all
+inet_protocols = ipv4
+
+mydestination = $myhostname, localhost.$mydomain, localhost, $mydomain
+
+home_mailbox = Maildir/
+
+smtpd_tls_cert_file=/etc/ssl/certs/mail.crt
+smtpd_tls_key_file=/etc/ssl/private/mail.key
+smtpd_use_tls=yes
+
+sudo apt install dovecot-imapd dovecot-pop3d -y
+
+sudo maildirmake.dovecot /home/user1/Maildir
+sudo chown -R user1:user1 /home/user1/Maildir
+
+sudo nano /etc/dovecot/dovecot.conf
+mail_location = maildir:~/Maildir
+
+sudo nano /etc/dovecot/conf.d/10-ssl.conf
+
+sudo apt install roundcube roundcube-mysql -y
+
+$config['db_dsnw'] = 'mysql://roundcube:passwordku@IP_DB/roundcube';
+
+$config['default_host'] = 'localhost';
+$config['smtp_server'] = 'localhost';
+
+mysql -h IP_DB -u roundcube -p roundcube < /usr/share/dbconfig-common/data/roundcube/install/mysql
+
+server {
+    listen 80;
+    server_name mail.local;
+
+    return 301 https://$host$request_uri;
+}
+
+# HTTP → redirect ke HTTPS
+server {
+    listen 80;
+    server_name mail.local;
+
+    return 301 https://$host$request_uri;
+}
+
+# HTTPS (Roundcube)
+server {
+    listen 443 ssl;
+    server_name mail.local;
+
+    ssl_certificate /etc/ssl/certs/mail.crt;
+    ssl_certificate_key /etc/ssl/private/mail.key;
+
+    root /var/lib/roundcube;
+    index index.php index.html;
+
+    location / {
+        try_files $uri $uri/ /index.php;
+    }
+
+    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php8.1-fpm.sock;
+    }
+}
+
+#haproxy
+frontend http_front
+    bind *:80
+    redirect scheme https code 301
+
+frontend https_front
+    bind *:443 ssl crt /etc/haproxy/certs/jogjalks14.pem
+    
+    acl is_app1 hdr(host) -i app1.jogjalks14.id
+    acl is_app2 hdr(host) -i app2.jogjalks14.id
+    
+    use_backend web1_back if is_app1
+    use_backend web2_back if is_app2
+
+frontend https_front
+    bind *:443 ssl crt /etc/haproxy/certs/merapi.pem
+    mode http
+    default_backend web_servers_http
+
+backend web_servers_http
+    mode http
+    balance roundrobin
+    server web1 192.168.14.2:80 check
+    server web2 192.168.14.3:80 check
