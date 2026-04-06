@@ -78,7 +78,7 @@ userPassword: Skill39
 EOF
 
 ldapadd -x -D "cn=admin,dc=lksjogja,dc=id" -W -f user.ldif
-
+ldapsearch -x -H ldap://localhost -b dc=example,dc=com
 
 
 
