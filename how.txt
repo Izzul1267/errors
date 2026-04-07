@@ -217,3 +217,21 @@ swaks --to user@lks2026.diy --from admin@lks2026.diy \
   --server mail.lks2026.diy --auth LOGIN \
   --auth-user <username> --auth-password <password>
 Akses webmail di browser: https://mail.lks2026.diy
+
+
+#haproxy
+Redirect HTTP → HTTPS
+frontend http_in
+    bind *:80
+    redirect scheme https code 301 if !{ ssl_fc }
+
+# HTTPS frontend
+frontend https_in
+    bind *:443 ssl crt /etc/haproxy/ssl/haproxy.pem
+    default_backend webservers
+
+backend webservers
+    balance roundrobin
+    option httpchk GET /
+    server web1 192.168.10.1:80 check
+    server web2 192.168.10.2:80 check
