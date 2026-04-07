@@ -1,0 +1,219 @@
+# Di INTERNAL, generate key (enter terus)
+ssh-keygen -t rsa -b 2048
+
+# Copy ke WEB1 dan WEB2
+ssh-copy-id root@<IP_WEB1>
+ssh-copy-id root@<IP_WEB2>
+Test manual dulu:
+ssh root@<IP_WEB1>   # harus masuk tanpa password
+ssh root@<IP_WEB2>
+3. Clone Playbook
+cd ~
+git clone https://github.com/Sir0ncy/playbook.git
+cd playbook
+ls  # lihat isi file
+4. Edit inventory.ini
+nano inventory.ini
+Isi sesuai topologi:
+[webservers]
+WEB1 ansible_host=<IP_WEB1> ansible_user=root
+WEB2 ansible_host=<IP_WEB2> ansible_user=root
+5. Test Konektivitas
+ansible -i inventory.ini webservers -m ping
+Expected output:
+WEB1 | SUCCESS => { "ping": "pong" }
+WEB2 | SUCCESS => { "ping": "pong" }
+
+
+apt update
+apt install -y samba
+2. Buat Direktori Share
+mkdir -p /opt/secret
+chmod 770 /opt/secret
+3. Buat Group & User
+Group gladiatorX harus ada:
+groupadd gladiatorX
+
+# Tambahkan user yang perlu akses ke group ini
+usermod -aG gladiatorX <username>
+
+# Daftarkan user ke Samba
+smbpasswd -a <username>
+4. Edit Konfigurasi Samba
+nano /etc/samba/smb.conf
+Tambahkan di bagian bawah:
+[Secret]
+   path = /opt/secret
+   valid users = @gladiatorX
+   read only = no
+   browseable = yes
+   guest ok = no
+   create mask = 0660
+   directory mask = 0770
+   force group = gladiatorX
+5. Set Ownership Direktori
+chown root:gladiatorX /opt/secret
+6. Restart Samba
+systemctl restart smbd nmbd
+systemctl enable smbd nmbd
+7. Test dari Windows Server / Client
+Di Windows, buka Run (Win+R):
+\\<IP_WEB1>\Secret
+
+
+Bagian 1 — Install Package
+apt update
+apt install -y postfix postfix-ldap dovecot-core dovecot-imapd \
+dovecot-ldap dovecot-lmtpd roundcube roundcube-core \
+roundcube-plugins nginx php-fpm
+Saat install postfix:
+Mail config type: Internet Site
+System mail name: lks2026.diy
+Bagian 2 — Postfix
+/etc/postfix/main.cf
+nano /etc/postfix/main.cf
+myhostname = mail.lks2026.diy
+mydomain = lks2026.diy
+myorigin = $mydomain
+mydestination = $myhostname, localhost, $mydomain
+mynetworks = 127.0.0.0/8
+
+# TLS
+smtpd_tls_cert_file = /etc/ssl/certs/mail.crt
+smtpd_tls_key_file = /etc/ssl/private/mail.key
+smtpd_tls_security_level = may
+smtp_tls_security_level = may
+
+# SMTPS
+smtpd_sasl_auth_enable = yes
+smtpd_sasl_type = dovecot
+smtpd_sasl_path = private/auth
+
+# Mailbox delivery via LMTP ke Dovecot
+mailbox_transport = lmtp:unix:private/dovecot-lmtp
+/etc/postfix/master.cf — aktifkan SMTPS
+nano /etc/postfix/master.cf
+Uncomment/tambahkan:
+submissions inet n - y - - smtpd
+  -o smtpd_tls_security_level=encrypt
+  -o smtpd_sasl_auth_enable=yes
+Bagian 3 — Dovecot
+/etc/dovecot/dovecot.conf
+nano /etc/dovecot/dovecot.conf
+protocols = imap lmtp
+/etc/dovecot/conf.d/10-mail.conf
+mail_location = maildir:~/Maildir
+/etc/dovecot/conf.d/10-auth.conf
+disable_plaintext_auth = yes
+auth_mechanisms = plain login
+
+!include auth-ldap.conf.ext
+/etc/dovecot/conf.d/auth-ldap.conf.ext
+passdb {
+  driver = ldap
+  args = /etc/dovecot/dovecot-ldap.conf.ext
+}
+
+userdb {
+  driver = ldap
+  args = /etc/dovecot/dovecot-ldap.conf.ext
+  }
+/etc/dovecot/dovecot-ldap.conf.ext
+hosts = <IP_INTERNAL>
+dn = cn=admin,dc=lks2026,dc=diy
+dnpass = <password_ldap_admin>
+base = ou=Mail,dc=lks2026,dc=diy
+scope = subtree
+
+user_filter = (&(objectClass=posixAccount)(uid=%u))
+pass_filter = (&(objectClass=posixAccount)(uid=%u))
+pass_attrs = userPassword=password
+
+user_attrs = homeDirectory=home, uidNumber=uid, gidNumber=gid
+/etc/dovecot/conf.d/10-ssl.conf
+ssl = required
+ssl_cert = </etc/ssl/certs/mail.crt
+ssl_key = </etc/ssl/private/mail.key
+/etc/dovecot/conf.d/10-master.conf — LMTP & auth socket
+service lmtp {
+  unix_listener /var/spool/postfix/private/dovecot-lmtp {
+    mode = 0600
+    user = postfix
+    group = postfix
+  }
+}
+
+service auth {
+  unix_listener /var/spool/postfix/private/auth {
+    mode = 0660
+    user = postfix
+    group = postfix
+  }
+}
+Bagian 4 — TLS Certificate dari INTERNAL
+Di INTERNAL Server, copy sertifikat ke WEB2:
+scp /path/to/mail.crt root@<IP_WEB2>:/etc/ssl/certs/mail.crt
+scp /path/to/mail.key root@<IP_WEB2>:/etc/ssl/private/mail.key
+Set permission:
+chmod 644 /etc/ssl/certs/mail.crt
+chmod 600 /etc/ssl/private/mail.key
+Bagian 5 — Nginx untuk Roundcube
+nano /etc/nginx/sites-available/roundcube
+server {
+    listen 80;
+    server_name mail.lks2026.diy;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name mail.lks2026.diy;
+
+    ssl_certificate /etc/ssl/certs/mail.crt;
+    ssl_certificate_key /etc/ssl/private/mail.key;
+
+    root /var/lib/roundcube/public_html;
+    index index.php;
+    
+    location / {
+        try_files $uri $uri/ /index.php;
+    }
+
+    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php-fpm.sock;
+    }
+}
+ln -s /etc/nginx/sites-available/roundcube /etc/nginx/sites-enabled/
+nginx -t && systemctl reload nginx
+Bagian 6 — Roundcube Config LDAP
+nano /etc/roundcube/config.inc.php
+$config['default_host'] = 'ssl://mail.lks2026.diy';
+$config['default_port'] = 993;
+$config['smtp_server'] = 'tls://mail.lks2026.diy';
+$config['smtp_port'] = 587;
+
+// LDAP Address Book
+$config['ldap_public']['lks2026'] = array(
+  'name' => 'LKS2026 LDAP',
+  'hosts' => array('<IP_INTERNAL>'),
+  'base_dn' => 'ou=Mail,dc=lks2026,dc=diy',
+  'bind_dn' => 'cn=admin,dc=lks2026,dc=diy',
+  'bind_pass' => '<password_ldap_admin>',
+  'filter' => '(objectClass=posixAccount)',
+);
+Bagian 7 — Restart Semua Service
+systemctl restart postfix dovecot nginx
+systemctl enable postfix dovecot nginx
+Test
+# Test SMTP
+telnet mail.lks2026.diy 25
+
+# Test IMAP
+telnet mail.lks2026.diy 143
+
+# Test kirim email
+swaks --to user@lks2026.diy --from admin@lks2026.diy \
+  --server mail.lks2026.diy --auth LOGIN \
+  --auth-user <username> --auth-password <password>
+Akses webmail di browser: https://mail.lks2026.diy
